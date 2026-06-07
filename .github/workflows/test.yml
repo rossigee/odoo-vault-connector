@@ -1,0 +1,147 @@
+name: Test
+
+on:
+  push:
+    branches: [ '16.0', '17.0', 'develop' ]
+  pull_request:
+    branches: [ '16.0', '17.0' ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - odoo-version: '16.0'
+            python-version: '3.11'
+          - odoo-version: '16.0'
+            python-version: '3.12'
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: odoo
+          POSTGRES_PASSWORD: odoo
+          POSTGRES_DB: test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libxml2-dev libxslt1-dev libldap2-dev libsasl2-dev \
+          libjpeg-dev libpq-dev libffi-dev \
+          nodejs npm \
+          fonts-liberation \
+          libssl-dev \
+          python3-dev \
+          python3-setuptools \
+          python3-renderpm \
+          python3-watchdog \
+          python3-pypdf2 \
+          python3-num2words \
+          python3-qrcode \
+          python3-vobject \
+          python3-openssl \
+          python3-docutils \
+          python3-libsass \
+          python3-polib \
+          python3-requests \
+          python3-xlrd \
+          python3-xlwt \
+          xmllint
+
+    - name: Clone Odoo
+      run: |
+        git clone --depth 1 --branch ${{ matrix.odoo-version }} https://github.com/odoo/odoo.git odoo
+
+    - name: Install Python dependencies
+      run: |
+        pip install --upgrade pip wheel setuptools
+        pip install -r odoo/requirements.txt
+        pip install coverage pytest pytest-odoo pytest-cov
+        pip install flake8 black isort bandit[toml] safety
+
+    - name: Lint with flake8
+      run: |
+        for dir in */; do
+          if [ -f "${dir}__manifest__.py" ]; then
+            flake8 "$dir" --max-line-length=88 --extend-ignore=E203,W503,E501 || true
+          fi
+        done
+
+    - name: Check formatting with black
+      run: |
+        for dir in */; do
+          if [ -f "${dir}__manifest__.py" ]; then
+            black --check --line-length=88 "$dir" || true
+          fi
+        done
+
+    - name: Check import order with isort
+      run: |
+        for dir in */; do
+          if [ -f "${dir}__manifest__.py" ]; then
+            isort --check-only --profile black "$dir" || true
+          fi
+        done
+
+    - name: Security check with bandit
+      run: |
+        for dir in */; do
+          if [ -f "${dir}__manifest__.py" ]; then
+            bandit -r "$dir" || true
+          fi
+        done
+
+    - name: Check dependencies with safety
+      run: |
+        safety check || true
+
+    - name: Validate XML files
+      run: |
+        find . -name "*.xml" -path "./.git" -prune -o -type f -exec xmllint --noout {} \; 2>/dev/null || true
+
+    - name: Validate manifests
+      run: |
+        python3 << 'EOF'
+        import ast
+        import glob
+        import sys
+
+        errors = []
+        for manifest_file in glob.glob('*/__manifest__.py'):
+          try:
+            with open(manifest_file, 'r') as f:
+              content = f.read()
+            lines = [l for l in content.split('\n') if not l.strip().startswith('#')]
+            manifest = ast.literal_eval('\n'.join(lines))
+
+            required = ['name', 'version', 'category', 'depends', 'installable']
+            missing = [k for k in required if k not in manifest]
+            if missing:
+              errors.append(f"{manifest_file}: missing {missing}")
+          except Exception as e:
+            errors.append(f"{manifest_file}: {e}")
+
+        if errors:
+          print('\n'.join(errors))
+          sys.exit(1)
+        print("✅ All manifests valid")
+        EOF

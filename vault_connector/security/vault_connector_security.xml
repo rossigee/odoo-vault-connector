@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Copyright 2025 Ross Golder -->
+<!-- License AGPL-3.0 or later (http://www.gnu.org/licenses/agpl.html). -->
+<odoo>
+    <data noupdate="1">
+        <!-- Create security group for vault access -->
+        <record id="group_vault_user" model="res.groups">
+            <field name="name">Vault User</field>
+            <field name="category_id" ref="base.module_category_hidden"/>
+            <field name="comment">Users who can access HashiCorp Vault secrets through Odoo</field>
+        </record>
+    </data>
+</odoo>

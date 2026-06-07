@@ -1,0 +1,181 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release'
+        required: true
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Get version info
+      id: version
+      run: |
+        if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          TAG="${{ github.event.inputs.tag }}"
+        else
+          TAG="${{ github.ref_name }}"
+        fi
+
+        VERSION="${TAG#v}"
+        echo "tag=$TAG" >> $GITHUB_OUTPUT
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+        # Check if pre-release
+        if [[ "$VERSION" == *"alpha"* ]] || [[ "$VERSION" == *"beta"* ]] || [[ "$VERSION" == *"rc"* ]]; then
+          echo "prerelease=true" >> $GITHUB_OUTPUT
+        else
+          echo "prerelease=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Validate manifest versions
+      run: |
+        python3 << 'EOF'
+        import ast
+        import glob
+        import sys
+
+        tag_version = "${{ steps.version.outputs.version }}"
+        mismatches = []
+
+        for manifest_file in glob.glob('*/__manifest__.py'):
+          with open(manifest_file, 'r') as f:
+            content = f.read()
+          lines = [l for l in content.split('\n') if not l.strip().startswith('#')]
+          manifest = ast.literal_eval('\n'.join(lines))
+          manifest_version = manifest.get('version', '')
+
+          if manifest_version != tag_version:
+            mismatches.append(f"{manifest_file}: {manifest_version} != {tag_version}")
+
+        if mismatches:
+          print("❌ Version mismatches:")
+          for m in mismatches:
+            print(f"  {m}")
+          sys.exit(1)
+
+        print(f"✅ All manifests match version {tag_version}")
+        EOF
+
+    - name: Generate changelog
+      id: changelog
+      run: |
+        PREV_TAG=$(git describe --tags --abbrev=0 ${{ steps.version.outputs.tag }}^ 2>/dev/null || echo "")
+
+        if [[ -z "$PREV_TAG" ]]; then
+          RANGE="${{ steps.version.outputs.tag }}"
+        else
+          RANGE="$PREV_TAG..${{ steps.version.outputs.tag }}"
+        fi
+
+        CHANGELOG=$(git log $RANGE --pretty=format:"* %s" --no-merges)
+
+        cat > RELEASE_NOTES.md << EOF
+        ## Changes in ${{ steps.version.outputs.version }}
+
+        $CHANGELOG
+
+        **Full Changelog**: https://github.com/${{ github.repository }}/compare/$PREV_TAG...${{ steps.version.outputs.tag }}
+        EOF
+
+    - name: Create module packages
+      run: |
+        mkdir -p dist
+        python3 << 'EOF'
+        import os
+        import glob
+        import tarfile
+        import zipfile
+        import hashlib
+
+        version = "${{ steps.version.outputs.version }}"
+        modules = []
+
+        for manifest in glob.glob('*/__manifest__.py'):
+          module_dir = os.path.dirname(manifest)
+          modules.append(module_dir)
+
+        for module in modules:
+          # Tar.gz
+          tar_name = f"dist/{module}-{version}.tar.gz"
+          with tarfile.open(tar_name, "w:gz") as tar:
+            tar.add(module, arcname=module)
+
+          # ZIP
+          zip_name = f"dist/{module}-{version}.zip"
+          with zipfile.ZipFile(zip_name, 'w') as zf:
+            for root, dirs, files in os.walk(module):
+              # Skip excluded directories
+              dirs[:] = [d for d in dirs if d not in ['.git', '__pycache__', '.pytest_cache', 'dist']]
+              for file in files:
+                if not file.startswith('.'):
+                  file_path = os.path.join(root, file)
+                  arcname = file_path
+                  zf.write(file_path, arcname)
+
+          print(f"  {module}: {tar_name}, {zip_name}")
+
+        # Generate checksums
+        os.chdir('dist')
+        with open('SHA256SUMS', 'w') as f:
+          for filename in os.listdir('.'):
+            if filename != 'SHA256SUMS':
+              with open(filename, 'rb') as fp:
+                hash = hashlib.sha256(fp.read()).hexdigest()
+                f.write(f"{hash}  {filename}\n")
+        EOF
+
+        echo "📦 Packages created:"
+        ls -lh dist/
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ steps.version.outputs.tag }}
+        name: Release ${{ steps.version.outputs.version }}
+        body_path: RELEASE_NOTES.md
+        draft: false
+        prerelease: ${{ steps.version.outputs.prerelease }}
+        files: |
+          dist/*
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Dispatch to downstream repos
+      if: steps.version.outputs.prerelease == 'false'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const repos = [
+            'odoo-bksc',
+            'odoo-pksc',
+            'odoo-rossgolderltd',
+            'odoo-family',
+            'bankrutrocks'
+          ];
+
+          for (const repo of repos) {
+            try {
+              await github.rest.repos.createDispatchEvent({
+                owner: 'rossigee',
+                repo: repo,
+                event_type: 'module-release',
+                client_payload: {
+                  module: context.repo.repo,
+                  version: '${{ steps.version.outputs.version }}'
+                }
+              });
+              console.log(`✅ Dispatched to rossigee/${repo}`);
+            } catch (error) {
+              console.log(`⚠️ Failed to dispatch to rossigee/${repo}: ${error.message}`);
+            }
+          }
