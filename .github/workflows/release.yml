@@ -109,7 +109,7 @@ jobs:
           # Tar.gz
           tar_name = f"dist/{module}-{version}.tar.gz"
           with tarfile.open(tar_name, "w:gz") as tar:
-            tar.add(module, arcname=module)
+            tar.add(module, arcname=f"odoo-vault-connector-16.0/{module}")
 
           # ZIP
           zip_name = f"dist/{module}-{version}.zip"
@@ -120,7 +120,7 @@ jobs:
               for file in files:
                 if not file.startswith('.'):
                   file_path = os.path.join(root, file)
-                  arcname = file_path
+                  arcname = f"odoo-vault-connector-16.0/{file_path}"
                   zf.write(file_path, arcname)
 
           print(f"  {module}: {tar_name}, {zip_name}")
