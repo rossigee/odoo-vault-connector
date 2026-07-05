@@ -6,6 +6,12 @@ from odoo.exceptions import ValidationError
 import requests
 import os
 import uuid
+import time
+import threading
+
+# Module-level session cache: {token, expires_at}
+_vault_session_cache = {}
+_vault_session_lock = threading.Lock()
 
 
 class VaultConnector(models.AbstractModel):
@@ -23,14 +29,87 @@ class VaultConnector(models.AbstractModel):
         return kv_store
 
     @api.model
+    def _get_vault_token(self):
+        """Get a valid Vault token, using AppRole login or cached static token.
+
+        Supports three auth methods in order of preference:
+        1. AppRole: VAULT_ROLE_ID + VAULT_SECRET_ID (with auto-renewal)
+        2. Static token: legacy VAULT_TOKEN env var (for backward compatibility)
+        3. None: raises exception if neither is available
+        """
+        vault_addr = os.environ.get('VAULT_ADDR')
+        vault_skip_verify = os.environ.get('VAULT_SKIP_VERIFY', 'false').lower() == 'true'
+
+        role_id = os.environ.get('VAULT_ROLE_ID')
+        secret_id = os.environ.get('VAULT_SECRET_ID')
+        static_token = os.environ.get('VAULT_TOKEN')
+
+        with _vault_session_lock:
+            current_time = time.time()
+
+            # Try to renew or use cached token if it exists and is still valid
+            if _vault_session_cache.get('token') and _vault_session_cache.get('expires_at', 0) > (current_time + 60):
+                # Token is still valid (with 60s safety margin)
+                return _vault_session_cache['token']
+
+            # Try to renew cached token if it exists
+            if _vault_session_cache.get('token'):
+                try:
+                    headers = {'X-Vault-Token': _vault_session_cache['token']}
+                    renew_url = f"{vault_addr}/v1/auth/token/renew-self"
+                    response = requests.post(renew_url, headers=headers, verify=not vault_skip_verify, timeout=5)
+                    if response.status_code == 200:
+                        data = response.json()
+                        lease_duration = data.get('auth', {}).get('lease_duration', 3600)
+                        _vault_session_cache['expires_at'] = current_time + lease_duration
+                        return _vault_session_cache['token']
+                except Exception:
+                    # Renewal failed, will fall through to login/static token
+                    pass
+
+            # Try AppRole login
+            if role_id and secret_id:
+                try:
+                    login_url = f"{vault_addr}/v1/auth/approle/login"
+                    response = requests.post(login_url, json={
+                        'role_id': role_id,
+                        'secret_id': secret_id
+                    }, verify=not vault_skip_verify, timeout=5)
+                    response.raise_for_status()
+                    data = response.json()
+                    token = data['auth']['client_token']
+                    lease_duration = data['auth'].get('lease_duration', 3600)
+                    _vault_session_cache['token'] = token
+                    _vault_session_cache['expires_at'] = current_time + lease_duration
+                    return token
+                except Exception as e:
+                    raise Exception(f"AppRole login to Vault failed: {str(e)}")
+
+            # Fall back to static token
+            if static_token:
+                _vault_session_cache['token'] = static_token
+                _vault_session_cache['expires_at'] = current_time + 86400  # Assume 24h for static token
+                return static_token
+
+            # No auth method available
+            raise Exception(
+                "Vault authentication not configured. Either set VAULT_ROLE_ID+VAULT_SECRET_ID "
+                "(AppRole) or VAULT_TOKEN (static token) environment variables."
+            )
+
+    @api.model
     def check_vault_status(self):
         """Check if vault is accessible and unsealed"""
         vault_addr = os.environ.get('VAULT_ADDR')
-        vault_token = os.environ.get('VAULT_TOKEN')
         vault_skip_verify = os.environ.get('VAULT_SKIP_VERIFY', 'false').lower() == 'true'
-        
-        if not vault_addr or not vault_token:
-            return {'accessible': False, 'error': 'VAULT_ADDR and VAULT_TOKEN environment variables must be set'}
+
+        if not vault_addr:
+            return {'accessible': False, 'error': 'VAULT_ADDR environment variable must be set'}
+
+        try:
+            vault_token = self._get_vault_token()
+        except Exception as e:
+            return {'accessible': False, 'error': f'Vault authentication failed: {str(e)}'}
         
         try:
             # Check vault seal status
@@ -64,10 +143,11 @@ class VaultConnector(models.AbstractModel):
     @api.model
     def get_secret(self, secret_id):
         vault_addr = os.environ.get('VAULT_ADDR')
-        vault_token = os.environ.get('VAULT_TOKEN')
         vault_skip_verify = os.environ.get('VAULT_SKIP_VERIFY', 'false').lower() == 'true'
-        if not vault_addr or not vault_token:
-            raise Exception("VAULT_ADDR and VAULT_TOKEN environment variables must be set.")
+        if not vault_addr:
+            raise Exception("VAULT_ADDR environment variable must be set.")
+
+        vault_token = self._get_vault_token()
 
         # Validate that secret_id is a valid UUID
         try:
@@ -105,10 +185,11 @@ class VaultConnector(models.AbstractModel):
     @api.model
     def set_secret(self, secret_id, data):
         vault_addr = os.environ.get('VAULT_ADDR')
-        vault_token = os.environ.get('VAULT_TOKEN')
         vault_skip_verify = os.environ.get('VAULT_SKIP_VERIFY', 'false').lower() == 'true'
-        if not vault_addr or not vault_token:
-            raise Exception("VAULT_ADDR and VAULT_TOKEN environment variables must be set.")
+        if not vault_addr:
+            raise Exception("VAULT_ADDR environment variable must be set.")
+
+        vault_token = self._get_vault_token()
 
         # Validate that secret_id is a valid UUID
         try:
