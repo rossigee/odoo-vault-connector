@@ -3,7 +3,7 @@
 
 {
     "name": "Vault Connector",
-    "version": "16.0.1.0.1",
+    "version": "17.0.1.0.0",
     "category": "Tools",
     "author": "Ross Golder",
     "website": "https://github.com/rossigee/odoo-vault-connector",
