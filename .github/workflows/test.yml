@@ -65,7 +65,7 @@ jobs:
           python3-requests \
           python3-xlrd \
           python3-xlwt \
-          xmllint
+          libxml2-utils
 
     - name: Clone Odoo
       run: |
