@@ -67,14 +67,14 @@ jobs:
           python3-xlwt \
           libxml2-utils
 
-    - name: Clone Odoo
+    - name: Fetch Odoo requirements
       run: |
-        git clone --depth 1 --branch ${{ matrix.odoo-version }} https://github.com/odoo/odoo.git odoo
+        curl -fsSL -o odoo-requirements.txt https://raw.githubusercontent.com/odoo/odoo/${{ matrix.odoo-version }}/requirements.txt
 
     - name: Install Python dependencies
       run: |
         pip install --upgrade pip wheel setuptools
-        pip install -r odoo/requirements.txt
+        pip install -r odoo-requirements.txt
         pip install coverage pytest pytest-odoo pytest-cov
         pip install flake8 black isort bandit[toml] safety
 
