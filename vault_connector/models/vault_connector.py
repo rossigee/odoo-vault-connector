@@ -17,7 +17,7 @@ _vault_session_lock = threading.Lock()
 class VaultConnector(models.AbstractModel):
     _name = 'vault.connector'
     _description = 'Vault Connector'
-    
+
     @api.model
     def _get_kv_store_name(self):
         """Get the KV store name from environment or generate from database name"""
@@ -117,22 +117,22 @@ class VaultConnector(models.AbstractModel):
             response = requests.get(status_url, verify=not vault_skip_verify, timeout=5)
             response.raise_for_status()
             status_data = response.json()
-            
+
             if status_data.get('sealed', True):
                 return {'accessible': False, 'error': 'Vault is sealed'}
-            
+
             # Check if token is valid by testing a simple auth call
             headers = {'X-Vault-Token': vault_token}
             auth_url = f"{vault_addr}/v1/auth/token/lookup-self"
             auth_response = requests.get(auth_url, headers=headers, verify=not vault_skip_verify, timeout=5)
-            
+
             if auth_response.status_code == 403:
                 return {'accessible': False, 'error': 'Vault token is invalid or expired'}
             elif auth_response.status_code != 200:
                 return {'accessible': False, 'error': f'Vault authentication failed: {auth_response.status_code}'}
-                
+
             return {'accessible': True, 'error': None}
-            
+
         except requests.exceptions.Timeout:
             return {'accessible': False, 'error': 'Vault connection timeout'}
         except requests.exceptions.ConnectionError:

@@ -3,17 +3,17 @@
 
 {
     "name": "Vault Connector",
-    "version": "17.0.1.0.0",
+    "version": "18.0.1.0.0",
     "category": "Tools",
     "author": "Ross Golder",
     "website": "https://github.com/rossigee/odoo-vault-connector",
     "summary": "Secure connection to Vault for secret storage",
     "description": """
-        This module provides a secure connection interface to Vault 
-        (HashiCorp Vault or OpenBao) for storing and retrieving sensitive 
-        data like private keys, tokens, and other secrets. It can be used 
+        This module provides a secure connection interface to Vault
+        (HashiCorp Vault or OpenBao) for storing and retrieving sensitive
+        data like private keys, tokens, and other secrets. It can be used
         as a dependency by other modules that need secure secret storage.
-        
+
         Features:
         - Vault connectivity and status checking
         - Secure secret storage and retrieval
