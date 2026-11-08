@@ -295,3 +295,35 @@ class TestVaultConnector(common.TransactionCase):
         expected_url = f'https://vault.example.com:8200/v1/custom-kv-store/data/{secret_id}'
         mock_get.assert_called_once()
         self.assertEqual(mock_get.call_args[0][0], expected_url)
+
+    @patch('odoo.addons.vault_connector.models.vault_connector.VaultConnector.check_vault_status')
+    @patch('requests.get')
+    def test_get_kv_field_reads_named_path(self, mock_get, mock_status):
+        """get_kv_field reads one field from <mount>/<key>, independent of the database name"""
+        mock_status.return_value = {'accessible': True, 'error': None}
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {'data': {'data': {'discord_url': 'https://example.test/hook'}}}
+        mock_get.return_value = mock_response
+
+        value = self.vault_connector.get_kv_field('tenants/family/odoo', 'discord_url')
+
+        self.assertEqual(value, 'https://example.test/hook')
+        self.assertEqual(mock_get.call_args[0][0], 'https://vault.example.com:8200/v1/tenants/data/family/odoo')
+
+    @patch('odoo.addons.vault_connector.models.vault_connector.VaultConnector.check_vault_status')
+    @patch('requests.get')
+    def test_get_kv_field_missing_field_raises(self, mock_get, mock_status):
+        mock_status.return_value = {'accessible': True, 'error': None}
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {'data': {'data': {'other': 'x'}}}
+        mock_get.return_value = mock_response
+
+        with self.assertRaises(Exception) as cm:
+            self.vault_connector.get_kv_field('tenants/family/odoo', 'discord_url')
+        self.assertIn("Field 'discord_url' not found", str(cm.exception))
+
+    def test_get_kv_field_rejects_bad_path(self):
+        with self.assertRaises(ValidationError):
+            self.vault_connector.get_kv_field('tenants', 'discord_url')
