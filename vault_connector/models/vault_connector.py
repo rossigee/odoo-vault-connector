@@ -183,6 +183,39 @@ class VaultConnector(models.AbstractModel):
 
 
     @api.model
+    def get_kv_field(self, path, field):
+        """Return one field of a KV v2 secret at an arbitrary path.
+
+        ``path`` is ``<mount>/<key>``, for example ``tenants/family/odoo``. Unlike
+        get_secret(), the mount is not derived from the database name and the key is
+        not required to be a UUID. Raises if the field is missing.
+        """
+        vault_addr = os.environ.get('VAULT_ADDR')
+        vault_skip_verify = os.environ.get('VAULT_SKIP_VERIFY', 'false').lower() == 'true'
+        if not vault_addr:
+            raise Exception("VAULT_ADDR environment variable must be set.")
+        mount, _sep, key = (path or '').partition('/')
+        if not mount or not key:
+            raise ValidationError(f"Vault path must be '<mount>/<key>', got: {path!r}")
+
+        vault_token = self._get_vault_token()
+        vault_status = self.check_vault_status()
+        if not vault_status['accessible']:
+            raise Exception(f"Vault is not accessible: {vault_status['error']}")
+
+        url = f"{vault_addr}/v1/{mount}/data/{key}"
+        try:
+            response = requests.get(
+                url, headers={'X-Vault-Token': vault_token}, verify=not vault_skip_verify)
+            response.raise_for_status()
+            data = response.json()['data']['data']
+        except requests.exceptions.RequestException as e:
+            raise Exception(f"Failed to read Vault path {path}: {str(e)}")
+        if field not in data:
+            raise Exception(f"Field {field!r} not found at Vault path {path}")
+        return data[field]
+
+    @api.model
     def set_secret(self, secret_id, data):
         vault_addr = os.environ.get('VAULT_ADDR')
         vault_skip_verify = os.environ.get('VAULT_SKIP_VERIFY', 'false').lower() == 'true'
