@@ -80,12 +80,10 @@ class TestVaultConnector(common.TransactionCase):
 
     def test_check_vault_status_missing_env_vars(self):
         """Test vault status check with missing environment variables"""
-        os.environ.pop('VAULT_ADDR', None)
-        os.environ.pop('VAULT_TOKEN', None)
-        
-        result = self.vault_connector.check_vault_status()
+        with patch.dict(os.environ, {}, clear=True):
+            result = self.vault_connector.check_vault_status()
         self.assertFalse(result['accessible'])
-        self.assertIn('VAULT_ADDR and VAULT_TOKEN', result['error'])
+        self.assertIn('VAULT_ADDR environment variable must be set', result['error'])
 
     @patch('requests.get')
     def test_check_vault_status_sealed(self, mock_get):
@@ -178,13 +176,11 @@ class TestVaultConnector(common.TransactionCase):
 
     def test_get_secret_missing_env_vars(self):
         """Test get_secret with missing environment variables"""
-        os.environ.pop('VAULT_ADDR', None)
-        os.environ.pop('VAULT_TOKEN', None)
-        
         secret_id = str(uuid.uuid4())
-        with self.assertRaises(Exception) as cm:
-            self.vault_connector.get_secret(secret_id)
-        self.assertIn('VAULT_ADDR and VAULT_TOKEN', str(cm.exception))
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(Exception) as cm:
+                self.vault_connector.get_secret(secret_id)
+        self.assertIn('VAULT_ADDR environment variable must be set', str(cm.exception))
 
     @patch('odoo.addons.vault_connector.models.vault_connector.VaultConnector.check_vault_status')
     def test_get_secret_vault_not_accessible(self, mock_status):
@@ -245,13 +241,11 @@ class TestVaultConnector(common.TransactionCase):
 
     def test_set_secret_missing_env_vars(self):
         """Test set_secret with missing environment variables"""
-        os.environ.pop('VAULT_ADDR', None)
-        os.environ.pop('VAULT_TOKEN', None)
-        
         secret_id = str(uuid.uuid4())
-        with self.assertRaises(Exception) as cm:
-            self.vault_connector.set_secret(secret_id, {'key': 'value'})
-        self.assertIn('VAULT_ADDR and VAULT_TOKEN', str(cm.exception))
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(Exception) as cm:
+                self.vault_connector.set_secret(secret_id, {'key': 'value'})
+        self.assertIn('VAULT_ADDR environment variable must be set', str(cm.exception))
 
     @patch('requests.post')
     def test_set_secret_request_exception(self, mock_post):
