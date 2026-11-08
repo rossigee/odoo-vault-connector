@@ -58,26 +58,37 @@ jobs:
         python -m pip install --upgrade pip wheel setuptools
         python -m pip install -r odoo/requirements.txt
 
+    - name: Stage modules under test
+      run: |
+        python3 -I - <<'PY'
+        import os, shutil, sys
+        base = os.environ['GITHUB_WORKSPACE']
+        roots = [os.path.join(base, 'module-repo')] + [os.path.join(base, p) for p in []]
+        stage = os.path.join(base, 'addons-under-test')
+        os.makedirs(stage, exist_ok=True)
+        for module in os.environ['ODOO_MODULES'].split(','):
+            found = [os.path.join(r, module) for r in roots if os.path.isdir(os.path.join(r, module))]
+            if len(found) != 1:
+                print('module ' + module + ' found ' + str(len(found)) + ' times, expected 1')
+                sys.exit(1)
+            os.symlink(found[0], os.path.join(stage, module))
+        print('staged: ' + ', '.join(sorted(os.listdir(stage))))
+        PY
+
     - name: Validate manifests and XML
       run: |
         python3 -I - <<'PY'
         import ast, os, sys
         import xml.etree.ElementTree as ET
-        base = os.environ['GITHUB_WORKSPACE']
-        roots = [os.path.join(base, 'module-repo')] + [
-            os.path.join(base, p) for p in []]
-        modules = os.environ['ODOO_MODULES'].split(',')
+        stage = os.path.join(os.environ['GITHUB_WORKSPACE'], 'addons-under-test')
         errors = []
-        for root in roots:
-            for entry in sorted(os.listdir(root)):
-                man = os.path.join(root, entry, '__manifest__.py')
-                if not os.path.isfile(man):
-                    continue
-                with open(man, encoding='utf-8') as fh:
-                    manifest = ast.literal_eval(fh.read())
-                if not str(manifest.get('version', '')).startswith('18.0'):
-                    errors.append(man + ': version ' + str(manifest.get('version')) + ' is not 18.0')
-            for dirpath, _dirs, files in os.walk(root):
+        for module in sorted(os.listdir(stage)):
+            man = os.path.join(stage, module, '__manifest__.py')
+            with open(man, encoding='utf-8') as fh:
+                manifest = ast.literal_eval(fh.read())
+            if not str(manifest.get('version', '')).startswith('18.0'):
+                errors.append(man + ': version ' + str(manifest.get('version')) + ' is not 18.0')
+            for dirpath, _dirs, files in os.walk(os.path.join(stage, module)):
                 for name in files:
                     if name.endswith('.xml'):
                         path = os.path.join(dirpath, name)
@@ -88,24 +99,19 @@ jobs:
         if errors:
             print('\n'.join(errors))
             sys.exit(1)
-        print('Manifests and XML valid for modules: ' + ', '.join(modules))
+        print('Manifests and XML valid')
         PY
 
     - name: Install declared Python dependencies
       run: |
         python3 -I - <<'PY' > /tmp/external-deps.txt
         import ast, os
-        base = os.environ['GITHUB_WORKSPACE']
-        roots = [os.path.join(base, 'module-repo')] + [
-            os.path.join(base, p) for p in []]
+        stage = os.path.join(os.environ['GITHUB_WORKSPACE'], 'addons-under-test')
         packages = set()
-        for root in roots:
-            for entry in os.listdir(root):
-                man = os.path.join(root, entry, '__manifest__.py')
-                if os.path.isfile(man):
-                    with open(man, encoding='utf-8') as fh:
-                        manifest = ast.literal_eval(fh.read())
-                    packages.update(manifest.get('external_dependencies', {}).get('python', []))
+        for module in os.listdir(stage):
+            with open(os.path.join(stage, module, '__manifest__.py'), encoding='utf-8') as fh:
+                manifest = ast.literal_eval(fh.read())
+            packages.update(manifest.get('external_dependencies', {}).get('python', []))
         for package in sorted(packages):
             print(package)
         PY
@@ -116,7 +122,7 @@ jobs:
 
     - name: Install and test Odoo modules
       run: |
-        ADDONS="odoo/addons,module-repo"
+        ADDONS="odoo/addons,$GITHUB_WORKSPACE/addons-under-test"
         python3 odoo/odoo-bin \
           -d odoo_test \
           -i "$ODOO_MODULES" \
