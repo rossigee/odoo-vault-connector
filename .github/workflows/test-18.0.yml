@@ -1,0 +1,131 @@
+name: Test 18.0
+
+on:
+  push:
+    branches:
+      - '18.0'
+      - 'upgrade/18.0-*'
+  pull_request:
+    branches:
+      - '18.0'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: odoo
+          POSTGRES_PASSWORD: odoo
+          POSTGRES_DB: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    env:
+      ODOO_MODULES: "vault_connector"
+      ODOO_TEST_TAGS: "/vault_connector"
+
+    steps:
+    - name: Checkout module repository
+      uses: actions/checkout@v4
+      with:
+        path: module-repo
+
+    - name: Checkout Odoo 18.0 source
+      uses: actions/checkout@v4
+      with:
+        repository: odoo/odoo
+        ref: '18.0'
+        path: odoo
+        fetch-depth: 1
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq \
+          libxml2-dev libxslt1-dev libldap2-dev libsasl2-dev \
+          libjpeg-dev libpq-dev libffi-dev libssl-dev postgresql-client
+
+    - name: Install Odoo 18.0 Python dependencies
+      run: |
+        python -m pip install --upgrade pip wheel setuptools
+        python -m pip install -r odoo/requirements.txt
+
+    - name: Validate manifests and XML
+      run: |
+        python3 -I - <<'PY'
+        import ast, os, sys
+        import xml.etree.ElementTree as ET
+        base = os.environ['GITHUB_WORKSPACE']
+        roots = [os.path.join(base, 'module-repo')] + [
+            os.path.join(base, p) for p in []]
+        modules = os.environ['ODOO_MODULES'].split(',')
+        errors = []
+        for root in roots:
+            for entry in sorted(os.listdir(root)):
+                man = os.path.join(root, entry, '__manifest__.py')
+                if not os.path.isfile(man):
+                    continue
+                with open(man, encoding='utf-8') as fh:
+                    manifest = ast.literal_eval(fh.read())
+                if not str(manifest.get('version', '')).startswith('18.0'):
+                    errors.append(man + ': version ' + str(manifest.get('version')) + ' is not 18.0')
+            for dirpath, _dirs, files in os.walk(root):
+                for name in files:
+                    if name.endswith('.xml'):
+                        path = os.path.join(dirpath, name)
+                        try:
+                            ET.parse(path)
+                        except ET.ParseError as exc:
+                            errors.append(path + ': ' + str(exc))
+        if errors:
+            print('\n'.join(errors))
+            sys.exit(1)
+        print('Manifests and XML valid for modules: ' + ', '.join(modules))
+        PY
+
+    - name: Install declared Python dependencies
+      run: |
+        python3 -I - <<'PY' > /tmp/external-deps.txt
+        import ast, os
+        base = os.environ['GITHUB_WORKSPACE']
+        roots = [os.path.join(base, 'module-repo')] + [
+            os.path.join(base, p) for p in []]
+        packages = set()
+        for root in roots:
+            for entry in os.listdir(root):
+                man = os.path.join(root, entry, '__manifest__.py')
+                if os.path.isfile(man):
+                    with open(man, encoding='utf-8') as fh:
+                        manifest = ast.literal_eval(fh.read())
+                    packages.update(manifest.get('external_dependencies', {}).get('python', []))
+        for package in sorted(packages):
+            print(package)
+        PY
+        cat /tmp/external-deps.txt
+        if [ -s /tmp/external-deps.txt ]; then
+          python -m pip install -r /tmp/external-deps.txt
+        fi
+
+    - name: Install and test Odoo modules
+      run: |
+        ADDONS="odoo/addons,module-repo"
+        python3 odoo/odoo-bin \
+          -d odoo_test \
+          -i "$ODOO_MODULES" \
+          --addons-path="$ADDONS" \
+          --db_host=localhost --db_user=odoo --db_password=odoo \
+          --test-enable --test-tags="$ODOO_TEST_TAGS" \
+          --without-demo=all --stop-after-init --log-level=test
