@@ -38,13 +38,8 @@ jobs:
       with:
         path: module-repo
 
-    - name: Checkout Odoo 18.0 source
-      uses: actions/checkout@v4
-      with:
-        repository: odoo/odoo
-        ref: '18.0'
-        path: odoo
-        fetch-depth: 1
+    - name: Fetch Odoo 18.0 source
+      run: git clone --depth 1 --branch 18.0 https://github.com/odoo/odoo.git odoo
 
     - name: Set up Python 3.12
       uses: actions/setup-python@v5
